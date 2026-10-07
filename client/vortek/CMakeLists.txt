@@ -35,6 +35,15 @@ add_library(vulkan_vortek SHARED
             src/ring_buffer.c)
 target_compile_definitions(vulkan_vortek PRIVATE VT_CLIENT)
 target_link_options(vulkan_vortek PRIVATE ${VORTEK_LINK_FLAGS})
+# println() 在 __ANDROID__ 下展开成 __android_log_print，需要 liblog
+if(ANDROID)
+    target_link_libraries(vulkan_vortek log)
+else()
+    find_library(VORTEK_LOG_LIB log)
+    if(VORTEK_LOG_LIB)
+        target_link_libraries(vulkan_vortek ${VORTEK_LOG_LIB})
+    endif()
+endif()
 if(ANDROID)
     # 客户端用 __android_log_print，Android 上必须显式链 liblog
     target_link_libraries(vulkan_vortek PRIVATE log)
