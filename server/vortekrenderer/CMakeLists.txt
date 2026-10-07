@@ -14,7 +14,12 @@ set(ADRENOTOOLS_LIBRARY adrenotools CACHE STRING "libadrenotools target or linke
 option(VORTEK_CLI_BUNDLE_WINLATOR_SOURCES "Compile the small Winlator utility sources needed by the CLI instead of linking libwinlator" ON)
 set(VORTEK_CLI_ANDROID_API "26" CACHE STRING "Android API level for Termux CLI clang target")
 
+# Release：-O3 + NDEBUG；request_handler.c / xwindow_swapchain.c 是每帧热路径
+set(VORTEK_RELEASE_FLAGS "-O3 -DNDEBUG -fno-semantic-interposition -fno-plt -ffunction-sections -fdata-sections")
 set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -O2 -Wno-unused-function -Wimplicit-function-declaration -D_GNU_SOURCE -DVK_USE_PLATFORM_ANDROID_KHR")
+set(CMAKE_C_FLAGS_RELEASE "${VORTEK_RELEASE_FLAGS}")
+set(CMAKE_C_FLAGS_RELWITHDEBINFO "${VORTEK_RELEASE_FLAGS} -g")
+add_link_options("-Wl,-O2,--gc-sections,--as-needed")
 
 set(VORTEK_RENDERER_SOURCES
     src/vk_object.c

@@ -11,12 +11,12 @@
 #define BITMASK_UNSET(bits, flag) bits &= ~flag
 #define GETEXP(x) (31 - __builtin_clz(x))
 
-#define APP_CACHE_DIR "/data/data/com.termux/usr/cache"
+#define APP_CACHE_DIR "/data/data/com.termux/files/usr/cache"
 #define LIBVULKAN_PATH "/system/lib64/libvulkan.so"
 
 #define CLOSEFD(x) \
     do { \
-        if (x > 0) { \
+        if (x >= 0) { \
             close(x); \
             x = -1; \
         } \

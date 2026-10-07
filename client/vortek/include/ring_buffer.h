@@ -37,6 +37,18 @@ extern uint32_t RingBuffer_getSHMemSize(uint32_t bufferSize);
 extern void RingBuffer_free(RingBuffer* ring);
 extern bool RingBuffer_waitForRead(RingBuffer* ring, uint32_t size);
 extern bool RingBuffer_waitForWrite(RingBuffer* ring, uint32_t size);
+/* 合并写：header+payload 只等一次、只提交一次 tail（即只 futex_wake 一次） */
+extern bool RingBuffer_write2(RingBuffer* ring, const void* header, uint32_t headerSize,
+                              const void* data, uint32_t dataSize);
+/* 不推进 head 的读取（配合 RingBuffer_commit 把「header+payload」合并成一次提交） */
+extern bool RingBuffer_peekAt(RingBuffer* ring, uint32_t offset, void* data, uint32_t size);
+extern void RingBuffer_commit(RingBuffer* ring, uint32_t size);
+/* 合并写：header+payload 只等一次、只提交一次 tail（即只 futex_wake 一次） */
+extern bool RingBuffer_write2(RingBuffer* ring, const void* header, uint32_t headerSize,
+                              const void* data, uint32_t dataSize);
+/* 不推进 head 的读取（配合 RingBuffer_commit 把「header+payload」合并成一次提交） */
+extern bool RingBuffer_peekAt(RingBuffer* ring, uint32_t offset, void* data, uint32_t size);
+extern void RingBuffer_commit(RingBuffer* ring, uint32_t size);
 
 #define RING_READ_BEGIN(ring, data, size) \
     uint32_t ringHead = 0; \

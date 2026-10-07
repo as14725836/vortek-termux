@@ -2,10 +2,19 @@
 #define DEVICE_NAME "Vortek (%s)"
 #define ENABLE_VALIDATION_LAYER 0 // FIXME set to 0 and remove libVkLayer from jniLibs
 #define DEBUG_MODE 0 // FIXME set to 0
-#define MEMORY_POOL_MAX_SIZE 65536
+#define MEMORY_POOL_MAX_SIZE 262144
 #define SERVER_RING_BUFFER_SIZE 4194304
 #define CLIENT_RING_BUFFER_SIZE 262144
-#define VORTEK_SERVER_PATH "/data/data/com.termux/files/usr/tmp/.vortek/V0"
+#define VORTEK_TMPDIR_DEFAULT "/data/data/com.termux/files/usr/tmp"
+#define VORTEK_SOCKET_SUBDIR ".vortek"
+#define VORTEK_SOCKET_NAME "V0"
+/* 显式覆盖优先；否则跟服务端 CLI 一样用 $TMPDIR */
+#define VORTEK_SOCKET_PATH_ENV "VORTEK_SOCKET_PATH"
+#define VORTEK_SERVER_PATH VORTEK_TMPDIR_DEFAULT "/" VORTEK_SOCKET_SUBDIR "/" VORTEK_SOCKET_NAME
+#define VORTEK_CONNECT_MAX_ATTEMPTS 50
+#define VORTEK_CONNECT_RETRY_US 20000
+/* 运行时可调的线程池上限（0/未设置 => 用 THREAD_POOL_NUM_THREADS） */
+#define VORTEK_THREADS_ENV "VORTEK_THREADS"
 #define VK_HANDLE_BYTE_COUNT 8
 #define THREAD_POOL_NUM_THREADS 8
 
@@ -182,6 +191,18 @@ static inline void* removeNextVkStructure(void* pNext, VkStructureType type) {
     return pFirst;
 }
 
+static inline const char* vortekServerPath(void) {
+    static char path[256];
+    const char* explicitPath = getenv(VORTEK_SOCKET_PATH_ENV);
+    if (explicitPath && explicitPath[0]) {
+        snprintf(path, sizeof(path), "%s", explicitPath);
+        return path;
+    }
+    const char* tmpDir = getenv("TMPDIR");
+    if (!tmpDir || !tmpDir[0]) tmpDir = VORTEK_TMPDIR_DEFAULT;
+    snprintf(path, sizeof(path), "%s/%s/%s", tmpDir, VORTEK_SOCKET_SUBDIR, VORTEK_SOCKET_NAME);
+    return path;
+}
 static inline void* vt_alloc(MemoryPool* memoryPool, int size) {
     bool isFull = (memoryPool->size + size) >= MEMORY_POOL_MAX_SIZE || !memoryPool->data;
     void* chunk;
@@ -234,31 +255,29 @@ static inline int vt_send(RingBuffer* ring, int requestCode, void* data, int siz
     char header[HEADER_SIZE];
     *(int*)(header + 0) = requestCode;
     *(int*)(header + 4) = size;
-
-    bool result = RingBuffer_write(ring, header, HEADER_SIZE);
-    if (!result) return 0;
-
-    if (size > 0) {
-        result = RingBuffer_write(ring, data, size);
-        if (!result) return 0;
-    }
-
+    /* header + payload 一次提交，少一次 futex 唤醒 */
+    if (!RingBuffer_write2(ring, header, HEADER_SIZE, size > 0 ? data : NULL,
+                           size > 0 ? (uint32_t)size : 0)) return 0;
     return size;
 }
 
 static inline int vt_recv(RingBuffer* ring, char** inputBuffer, int* bufferSize, MemoryPool* memoryPool) {
     char header[HEADER_SIZE];
-    bool result = RingBuffer_read(ring, header, HEADER_SIZE);
-    if (!result) return VK_ERROR_DEVICE_LOST;
-
+    if (!RingBuffer_waitForRead(ring, HEADER_SIZE)) return VK_ERROR_DEVICE_LOST;
+    if (!RingBuffer_peekAt(ring, 0, header, HEADER_SIZE)) return VK_ERROR_DEVICE_LOST;
     int requestCode = *(int*)(header + 0);
     int size = *(int*)(header + 4);
-
-    if (size > 0) {
-        *inputBuffer = vt_alloc(memoryPool, size);
-        result = RingBuffer_read(ring, *inputBuffer, size);
-        if (!result) return VK_ERROR_DEVICE_LOST;
+    if (size < 0 || (uint32_t)size > ring->bufferSize - HEADER_SIZE) {
+        println("vortek: ring bad payload size %d", size);
+        return VK_ERROR_DEVICE_LOST;
     }
+    if (size > 0) {
+        if (!RingBuffer_waitForRead(ring, HEADER_SIZE + (uint32_t)size)) return VK_ERROR_DEVICE_LOST;
+        *inputBuffer = vt_alloc(memoryPool, size);
+        if (!RingBuffer_peekAt(ring, HEADER_SIZE, *inputBuffer, (uint32_t)size)) return VK_ERROR_DEVICE_LOST;
+    }
+    /* header+payload 一次提交，少一次 futex 唤醒 */
+    RingBuffer_commit(ring, HEADER_SIZE + (uint32_t)size);
 
     if (bufferSize) *bufferSize = size;
     return requestCode;

@@ -21,16 +21,17 @@ static inline int send_fds(int sockFd, int* fds, int numFds, void* data, int siz
         .msg_iovlen = 1,
         .msg_flags = 0,
         .msg_control = &ctrlmsg,
-        .msg_controllen = sizeof(struct cmsghdr) + numFds * sizeof(int)
+        .msg_controllen = CMSG_SPACE(numFds * sizeof(int))
     };
-
+    if (numFds < 0 || numFds > MAX_FDS) return -1;
     struct cmsghdr *cmsg = CMSG_FIRSTHDR(&msg);
     cmsg->cmsg_level = SOL_SOCKET;
     cmsg->cmsg_type = SCM_RIGHTS;
-    cmsg->cmsg_len = msg.msg_controllen;
-
+    cmsg->cmsg_len = CMSG_LEN(numFds * sizeof(int));
     for (int i = 0; i < numFds; i++) ((int*)CMSG_DATA(cmsg))[i] = fds[i];
-    return sendmsg(sockFd, &msg, 0);
+    int res;
+    do { res = (int)sendmsg(sockFd, &msg, 0); } while (res < 0 && errno == EINTR);
+    return res;
 }
 
 static inline int recv_fds(int sockFd, int* outFds, int* outNumFds, void* outData, int size) {
@@ -49,11 +50,11 @@ static inline int recv_fds(int sockFd, int* outFds, int* outNumFds, void* outDat
         .msg_iovlen = 1,
         .msg_flags = 0,
         .msg_control = &ctrlmsg,
-        .msg_controllen = sizeof(struct cmsghdr) + MAX_FDS * sizeof(int)
+        .msg_controllen = CMSG_SPACE(MAX_FDS * sizeof(int))
     };
-
     *outNumFds = 0;
-    int res = recvmsg(sockFd, &msg, 0);
+    int res;
+    do { res = (int)recvmsg(sockFd, &msg, 0); } while (res < 0 && errno == EINTR);
     if (res > 0) {
         struct cmsghdr* cmsg;
         for (cmsg = CMSG_FIRSTHDR(&msg); cmsg; cmsg = CMSG_NXTHDR(&msg, cmsg)) {
@@ -76,8 +77,12 @@ static inline int sock_read(int fd, char* buffer, int size) {
 
     left = size;
     do {
-        result = read(fd, ptr, left);
-        if (result <= 0) return result == -1 ? -1 : 0;
+        result = (int)read(fd, ptr, left);
+        if (result < 0) {
+            if (errno == EINTR) continue;
+            return -1;
+        }
+        if (result == 0) return 0;
         left -= result;
         ptr += result;
     }
@@ -91,10 +96,12 @@ static inline int sock_write(int fd, char* buffer, int size) {
     int left;
     int result;
     left = size;
-
     do {
-        result = write(fd, ptr, left);
-        if (result < 0) return -1;
+        result = (int)write(fd, ptr, left);
+        if (result < 0) {
+            if (errno == EINTR) continue;
+            return -1;
+        }
         left -= result;
         ptr += result;
     }
