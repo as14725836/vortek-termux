@@ -191,17 +191,50 @@ static inline void* removeNextVkStructure(void* pNext, VkStructureType type) {
     return pFirst;
 }
 
-static inline const char* vortekServerPath(void) {
-    static char path[256];
+/* 服务端是 Termux bionic 进程、客户端跑在 glibc 前缀（Hangover/Wine）里，
+ * 两边的 TMPDIR 很可能不是同一个目录。所以这里返回一串候选路径，逐个试。
+ * 顺序：显式环境变量 > $TMPDIR > $PREFIX/tmp > $PREFIX/glibc/tmp > Termux 默认 tmp
+ */
+#define VORTEK_SOCKET_CANDIDATE_MAX 6
+#define VORTEK_SOCKET_PATH_MAX 256
+static inline int vortekServerPathCandidates(char out[][VORTEK_SOCKET_PATH_MAX], int maxCount) {
+    static char prefixTmp[VORTEK_SOCKET_PATH_MAX];
+    static char prefixGlibcTmp[VORTEK_SOCKET_PATH_MAX];
+    const char* dirs[5];
+    int dirCount = 0;
+    int count = 0;
     const char* explicitPath = getenv(VORTEK_SOCKET_PATH_ENV);
-    if (explicitPath && explicitPath[0]) {
-        snprintf(path, sizeof(path), "%s", explicitPath);
-        return path;
-    }
     const char* tmpDir = getenv("TMPDIR");
-    if (!tmpDir || !tmpDir[0]) tmpDir = VORTEK_TMPDIR_DEFAULT;
-    snprintf(path, sizeof(path), "%s/%s/%s", tmpDir, VORTEK_SOCKET_SUBDIR, VORTEK_SOCKET_NAME);
-    return path;
+    const char* prefix = getenv("PREFIX");
+    if (explicitPath && explicitPath[0] && count < maxCount) {
+        snprintf(out[count++], VORTEK_SOCKET_PATH_MAX, "%s", explicitPath);
+    }
+    if (tmpDir && tmpDir[0]) dirs[dirCount++] = tmpDir;
+    if (prefix && prefix[0]) {
+        snprintf(prefixTmp, sizeof(prefixTmp), "%s/tmp", prefix);
+        dirs[dirCount++] = prefixTmp;
+        snprintf(prefixGlibcTmp, sizeof(prefixGlibcTmp), "%s/glibc/tmp", prefix);
+        dirs[dirCount++] = prefixGlibcTmp;
+    }
+    dirs[dirCount++] = VORTEK_TMPDIR_DEFAULT;
+    for (int i = 0; i < dirCount && count < maxCount; i++) {
+        snprintf(out[count], VORTEK_SOCKET_PATH_MAX, "%s/%s/%s",
+                 dirs[i], VORTEK_SOCKET_SUBDIR, VORTEK_SOCKET_NAME);
+        /* 去重：$PREFIX/tmp 与默认 tmp 常常是同一个 */
+        bool duplicate = false;
+        for (int j = 0; j < count; j++) {
+            if (strcmp(out[j], out[count]) == 0) { duplicate = true; break; }
+        }
+        if (!duplicate) count++;
+    }
+    return count;
+}
+
+static inline const char* vortekServerPath(void) {
+    static char candidates[VORTEK_SOCKET_CANDIDATE_MAX][VORTEK_SOCKET_PATH_MAX];
+    static int cachedCount = -1;
+    if (cachedCount < 0) cachedCount = vortekServerPathCandidates(candidates, VORTEK_SOCKET_CANDIDATE_MAX);
+    return cachedCount > 0 ? candidates[0] : VORTEK_SERVER_PATH;
 }
 static inline void* vt_alloc(MemoryPool* memoryPool, int size) {
     bool isFull = (memoryPool->size + size) >= MEMORY_POOL_MAX_SIZE || !memoryPool->data;

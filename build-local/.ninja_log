@@ -1,9 +1,9 @@
 # ninja log v5
-28	1003	1791335790567474395	CMakeFiles/vulkan_vortek.dir/src/main.c.o	734b9f2066e541fb
-40	1061	1791335790619474395	CMakeFiles/vulkan_vortek.dir/src/vk_object_pool.c.o	41d683ca11a5fc7e
-35	1354	1791335790919474395	CMakeFiles/vulkan_vortek.dir/src/vk_object.c.o	8c66eda7318a6ec
-1062	2184	1791335791747474394	CMakeFiles/vulkan_vortek.dir/src/descriptor_update_template.c.o	5f2012f86851cc56
-1007	2221	1791335791783474394	CMakeFiles/vulkan_vortek.dir/src/arrays.c.o	6091fe32f0ebae14
-1355	2482	1791335792055474394	CMakeFiles/vulkan_vortek.dir/src/ring_buffer.c.o	1a5212a7d4e8c256
-31	16078	1791335805635474389	CMakeFiles/vulkan_vortek.dir/src/vulkan_calls.c.o	3067e143f924e249
-16079	16226	1791335805803474389	libvulkan_vortek.so	716062e81cb8f686
+32	756	1791337065991473908	CMakeFiles/vulkan_vortek.dir/src/vk_object_pool.c.o	41d683ca11a5fc7e
+29	796	1791337066031473908	CMakeFiles/vulkan_vortek.dir/src/vk_object.c.o	8c66eda7318a6ec
+24	1059	1791337066303473908	CMakeFiles/vulkan_vortek.dir/src/main.c.o	734b9f2066e541fb
+760	2007	1791337067239473908	CMakeFiles/vulkan_vortek.dir/src/arrays.c.o	6091fe32f0ebae14
+796	2026	1791337067267473908	CMakeFiles/vulkan_vortek.dir/src/descriptor_update_template.c.o	5f2012f86851cc56
+1060	2266	1791337067507473908	CMakeFiles/vulkan_vortek.dir/src/ring_buffer.c.o	1a5212a7d4e8c256
+27	14294	1791337079527473903	CMakeFiles/vulkan_vortek.dir/src/vulkan_calls.c.o	3067e143f924e249
+14295	14469	1791337079715473903	libvulkan_vortek.so	716062e81cb8f686

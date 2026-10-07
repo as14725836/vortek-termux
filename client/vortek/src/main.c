@@ -12,32 +12,42 @@ RingBuffer* serverRing = NULL;
 RingBuffer* clientRing = NULL;
 
 static int vortekServerConnect() {
-    const char* socketPath = vortekServerPath();
-    struct sockaddr_un server_addr;
-    memset(&server_addr, 0, sizeof(server_addr));
-    server_addr.sun_family = AF_LOCAL;
-    if (strlen(socketPath) >= sizeof(server_addr.sun_path)) {
-        println("vortek: socket path too long (%zu >= %zu): %s",
-                strlen(socketPath), sizeof(server_addr.sun_path), socketPath);
-        return -1;
-    }
-    strncpy(server_addr.sun_path, socketPath, sizeof(server_addr.sun_path) - 1);
-    /* 服务端可能比客户端晚一点起来（Termux 里很常见），
-     * 对 ENOENT / ECONNREFUSED 做有限次退避重试 */
-    for (int attempt = 0; attempt < VORTEK_CONNECT_MAX_ATTEMPTS; attempt++) {
-        int fd = socket(AF_UNIX, SOCK_STREAM, 0);
-        if (fd < 0) return -1;
-        int res;
-        do {
-            res = 0;
-            if (connect(fd, (struct sockaddr*)&server_addr, sizeof(struct sockaddr_un)) < 0) res = -errno;
+    static char candidates[VORTEK_SOCKET_CANDIDATE_MAX][VORTEK_SOCKET_PATH_MAX];
+    int candidateCount = vortekServerPathCandidates(candidates, VORTEK_SOCKET_CANDIDATE_MAX);
+    /* 服务端在 Termux bionic 侧、客户端在 glibc 前缀里，TMPDIR 不保证一致，
+     * 所以逐个候选路径试；每个路径内部再做有限次退避重试。 */
+    for (int c = 0; c < candidateCount; c++) {
+        const char* socketPath = candidates[c];
+        struct sockaddr_un server_addr;
+        memset(&server_addr, 0, sizeof(server_addr));
+        server_addr.sun_family = AF_LOCAL;
+        if (strlen(socketPath) >= sizeof(server_addr.sun_path)) {
+            println("vortek: socket path too long (%zu >= %zu): %s",
+                    strlen(socketPath), sizeof(server_addr.sun_path), socketPath);
+            continue;
         }
-        while (res == -EINTR);
-        if (res == 0) return fd;
-        close(fd);
-        if (res != -ENOENT && res != -ECONNREFUSED) return -1;
-        usleep(VORTEK_CONNECT_RETRY_US);
+        strncpy(server_addr.sun_path, socketPath, sizeof(server_addr.sun_path) - 1);
+        for (int attempt = 0; attempt < VORTEK_CONNECT_MAX_ATTEMPTS; attempt++) {
+            int fd = socket(AF_UNIX, SOCK_STREAM, 0);
+            if (fd < 0) return -1;
+            int res;
+            do {
+                res = 0;
+                if (connect(fd, (struct sockaddr*)&server_addr, sizeof(struct sockaddr_un)) < 0) res = -errno;
+            }
+            while (res == -EINTR);
+            if (res == 0) {
+                if (c > 0) println("vortek: connected via fallback socket path: %s", socketPath);
+                return fd;
+            }
+            close(fd);
+            /* 非“还没起来”类错误（比如权限）不再在当前路径上重试 */
+            if (res != -ENOENT && res != -ECONNREFUSED) break;
+            usleep(VORTEK_CONNECT_RETRY_US);
+        }
     }
+    for (int c = 0; c < candidateCount; c++) println("vortek: tried socket path: %s", candidates[c]);
+    println("vortek: no server reachable -- start the Termux CLI server first (vortekrenderer-cli)");
     return -1;
 }
 

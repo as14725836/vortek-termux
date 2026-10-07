@@ -57,6 +57,7 @@ def server_thread(path):
     except FileNotFoundError:
         pass
     s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
     s.bind(path)
     s.listen(1)
     state['listening'] = True
@@ -118,6 +119,8 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('so')
     ap.add_argument('--socket', default='/tmp/vortek_probe.sock')
+    ap.add_argument('--via-fallback', action='store_true',
+                    help='不设 VORTEK_SOCKET_PATH：把 socket 放在 \$PREFIX/tmp 候选里，TMPDIR 指向空目录')
     args = ap.parse_args()
 
     so = os.path.abspath(args.so)
@@ -136,7 +139,16 @@ def main():
     with open(mpath, 'w') as f:
         json.dump(manifest, f, indent=4)
 
-    os.environ['VORTEK_SOCKET_PATH'] = args.socket
+    if args.via_fallback:
+        # 模拟真实拓扑：服务端在 \$PREFIX/tmp，而客户端的 TMPDIR 是另一个目录
+        prefix = tempfile.mkdtemp(prefix='vortekprefix-')
+        empty = tempfile.mkdtemp(prefix='vortekempty-')   # 故意空的 TMPDIR
+        args.socket = os.path.join(prefix, 'tmp', '.vortek', 'V0')
+        os.environ['PREFIX'] = prefix
+        os.environ['TMPDIR'] = empty
+        os.environ.pop('VORTEK_SOCKET_PATH', None)
+    else:
+        os.environ['VORTEK_SOCKET_PATH'] = args.socket
     os.environ['VK_ICD_FILENAMES'] = mpath
     os.environ.setdefault('VK_LOADER_DEBUG', 'error,warn,driver')
     print('[probe] socket =', args.socket)
