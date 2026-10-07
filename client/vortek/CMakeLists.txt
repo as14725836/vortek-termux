@@ -35,6 +35,10 @@ add_library(vulkan_vortek SHARED
             src/ring_buffer.c)
 target_compile_definitions(vulkan_vortek PRIVATE VT_CLIENT)
 target_link_options(vulkan_vortek PRIVATE ${VORTEK_LINK_FLAGS})
+if(ANDROID)
+    # 客户端用 __android_log_print，Android 上必须显式链 liblog
+    target_link_libraries(vulkan_vortek PRIVATE log)
+endif()
 
 install(TARGETS vulkan_vortek LIBRARY DESTINATION lib)
 install(FILES vortek_icd.aarch64.json DESTINATION share/vulkan/icd.d)
