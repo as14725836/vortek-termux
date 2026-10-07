@@ -396,6 +396,110 @@ def fmt_row(p: Proc):
 # ==========================================================================
 # PyQt5 GUI
 # ==========================================================================
+def read_nice(pid):
+    """优先级（nice 值：-20 最高 … 19 最低）。"""
+    raw = _read('/proc/%d/stat' % pid, 4096)
+    if not raw:
+        return None
+    try:
+        rest = raw.decode('utf-8', 'replace').split(')')[-1].split()
+        return int(rest[16])            # stat 的第 19 个字段
+    except (ValueError, IndexError):
+        return None
+
+
+def read_threads(pid):
+    raw = _read('/proc/%d/status' % pid, 8192).decode('utf-8', 'replace')
+    m = re.search(r'^Threads:\s+(\d+)', raw, re.M)
+    return int(m.group(1)) if m else 0
+
+
+def read_uid(pid):
+    try:
+        return os.stat('/proc/%d' % pid).st_uid
+    except OSError:
+        return -1
+
+
+def read_ppid(pid):
+    st = read_stat(pid)
+    return st[2] if st else 0
+
+
+def descendants(pid):
+    """pid 的全部后代（含自身），深的在前 —— 先杀子再杀父。"""
+    parent = {}
+    for p in iter_pids():
+        pp = read_ppid(p)
+        if pp:
+            parent[p] = pp
+    kids = {}
+    for child, par in parent.items():
+        kids.setdefault(par, []).append(child)
+    out, stack = [], [pid]
+    while stack:
+        cur = stack.pop()
+        out.append(cur)
+        stack.extend(kids.get(cur, []))
+    return out[::-1]
+
+
+def kill_tree(pid, sig=signal.SIGTERM):
+    """taskmgr 的“结束任务树”语义：先子后父。返回 (成功数, 失败说明)。"""
+    ok, bad = 0, []
+    for p in descendants(pid):
+        try:
+            os.kill(p, sig)
+            ok += 1
+        except OSError as e:
+            if p == pid:
+                bad.append('%d: %s' % (p, e))
+    return ok, bad
+
+
+def set_priority(pid, nice):
+    """设置 nice 值（负数需要 root / CAP_SYS_NICE）。返回错误字符串或 None。"""
+    try:
+        os.setpriority(os.PRIO_PROCESS, pid, nice)
+        return None
+    except (OSError, AttributeError, PermissionError) as e:
+        return str(e)
+
+
+def proc_details(pid):
+    """“属性”对话框用的字段集合。"""
+    st = read_stat(pid)
+    exe, arch, wow64, is_pe = read_pe_info(pid)
+    uptime = 0.0
+    try:
+        with open('/proc/uptime') as f:
+            uptime = float(f.read().split()[0])
+    except (OSError, ValueError, IndexError):
+        pass
+    start = ''
+    raw = _read('/proc/%d/stat' % pid, 4096).decode('utf-8', 'replace')
+    if raw:
+        try:
+            start_ticks = int(raw.split(')')[-1].split()[19])   # starttime，单位 jiffies
+            age = max(0.0, uptime - start_ticks / CLK_TCK)
+            start = '%.1f 分钟前' % (age / 60) if age > 60 else '%.0f 秒前' % age
+        except (ValueError, IndexError):
+            pass
+    return [('PID', str(pid)),
+            ('PPID', str(st[2]) if st else '?'),
+            ('名称', exe or (st[0] if st else '')),
+            ('架构', (arch or '?') + ('（wow64）' if wow64 else '')),
+            ('状态', st[1] if st else '?'),
+            ('内存 RSS', fmt_mem(read_rss_kb(pid))),
+            ('线程数', str(read_threads(pid))),
+            ('优先级 nice', str(read_nice(pid))),
+            ('CPU 亲和', fmt_affinity(read_affinity(pid))),
+            ('启动于', start or '?'),
+            ('uid', str(read_uid(pid))),
+            ('可执行文件', exe or '?'),
+            ('命令行', (read_cmdline(pid) or '')[:160])]
+
+
 def run_gui(args):
     from PyQt5.QtCore import Qt, QTimer
     from PyQt5.QtGui import QColor, QFont
@@ -444,7 +548,7 @@ def run_gui(args):
             self.table.setHorizontalHeaderLabels(COLS)
             self.table.verticalHeader().setVisible(False)
             self.table.setSelectionBehavior(QTableWidget.SelectRows)
-            self.table.setSelectionMode(QTableWidget.SingleSelection)
+            self.table.setSelectionMode(QTableWidget.ExtendedSelection)
             self.table.setEditTriggers(QTableWidget.NoEditTriggers)
             self.table.setShowGrid(False)
             hh = self.table.horizontalHeader()
@@ -472,6 +576,9 @@ def run_gui(args):
             bar.addWidget(btn('恢复', lambda: self.signal_selected(signal.SIGCONT, '恢复')))
             bar.addWidget(btn('结束', lambda: self.signal_selected(signal.SIGTERM, '结束')))
             bar.addWidget(btn('强杀', lambda: self.signal_selected(signal.SIGKILL, '强杀'), True))
+            bar.addWidget(btn('结束树', self.kill_selected_tree, True))
+            bar.addWidget(btn('优先级…', self.edit_priority))
+            bar.addWidget(btn('属性', self.show_details))
             bar.addWidget(btn('亲和性…', self.edit_affinity))
             bar.addWidget(btn('新建任务…', self.new_task))
             bar.addStretch(1)
@@ -546,16 +653,82 @@ def run_gui(args):
                 return None
             return self.last_rows[r].pid
 
+        def selected_pids(self):
+            """支持多选（Ctrl/Shift），批量操作像 taskmgr 一样。"""
+            rows = sorted({i.row() for i in self.table.selectedIndexes()})
+            return [self.last_rows[r].pid for r in rows if 0 <= r < len(self.last_rows)]
+
         def signal_selected(self, sig, label):
-            pid = self.selected_pid()
-            if pid is None:
-                self.status.setText('先选中一个进程')
+            pids = self.selected_pids()
+            if not pids:
+                self.status.setText('先选中进程')
                 return
-            try:
-                os.kill(pid, sig)
-                self.status.setText('%s 已发送给 PID %d' % (label, pid))
-            except OSError as e:
-                self.status.setText('失败: %s' % e)
+            if sig in (signal.SIGTERM, signal.SIGKILL):
+                if QMessageBox.question(self, '确认',
+                                        '%s %d 个进程？' % (label, len(pids)),
+                                        QMessageBox.Yes | QMessageBox.No,
+                                        QMessageBox.No) != QMessageBox.Yes:
+                    return
+            ok, bad = 0, []
+            for pid in pids:
+                try:
+                    os.kill(pid, sig)
+                    ok += 1
+                except OSError as e:
+                    bad.append('%d:%s' % (pid, e))
+            self.status.setText('%s：成功 %d，失败 %d %s'
+                                % (label, ok, len(bad), '; '.join(bad[:3])))
+            self.refresh()
+
+        def kill_selected_tree(self):
+            pids = self.selected_pids()
+            if not pids:
+                self.status.setText('先选中进程')
+                return
+            names = ', '.join(str(p) for p in pids[:5]) + (' …' if len(pids) > 5 else '')
+            if QMessageBox.question(self, '结束进程树',
+                                    '结束这些进程及其全部子进程？\n%s' % names,
+                                    QMessageBox.Yes | QMessageBox.No,
+                                    QMessageBox.No) != QMessageBox.Yes:
+                return
+            total = 0
+            for pid in pids:
+                n, _ = kill_tree(pid, signal.SIGTERM)
+                total += n
+            self.status.setText('结束树：已向 %d 个进程发送 SIGTERM' % total)
+            QTimer.singleShot(2000, lambda ps=list(pids): [kill_tree(p, signal.SIGKILL)
+                                                           for p in ps])
+            QTimer.singleShot(2600, self.refresh)
+
+        def edit_priority(self):
+            pids = self.selected_pids()
+            if len(pids) != 1:
+                self.status.setText('优先级请只选一个进程')
+                return
+            pid = pids[0]
+            levels = ['高（-10，可能需 root）', '高于正常（-5）', '正常（0）',
+                      '低于正常（5）', '低（10）', '最低（19）']
+            values = [-10, -5, 0, 5, 10, 19]
+            cur = read_nice(pid)
+            idx = values.index(cur) if cur in values else 2
+            item, ok = QInputDialog.getItem(self, '优先级 — PID %d' % pid, '选择：',
+                                            levels, idx, False)
+            if not ok:
+                return
+            val = values[levels.index(item)]
+            err = set_priority(pid, val)
+            self.status.setText(('设置优先级失败: %s' % err) if err
+                                else ('PID %d 优先级 -> %d' % (pid, val)))
+            self.refresh()
+
+        def show_details(self):
+            pids = self.selected_pids()
+            if len(pids) != 1:
+                self.status.setText('属性请只选一个进程')
+                return
+            pid = pids[0]
+            text = '\n'.join('%-14s %s' % (k, v) for k, v in proc_details(pid))
+            QMessageBox.information(self, '属性 — PID %d' % pid, text)
 
         def edit_affinity(self):
             pid = self.selected_pid()
