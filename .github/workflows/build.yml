@@ -78,6 +78,9 @@ jobs:
           sudo apt-get install -y -qq libx11-dev libxcb1-dev
           mkdir -p "$PWD/.ci-x11-include"
           cp -r /usr/include/X11 /usr/include/xcb "$PWD/.ci-x11-include/"
+          # 只取 vulkan/ 子目录：直接加 server/vortekrenderer/include 会遮蔽客户端的同名头
+          mkdir -p "$PWD/.ci-vulkan-include"
+          cp -r server/vortekrenderer/include/vulkan "$PWD/.ci-vulkan-include/"
 
       - name: 配置并构建 ICD
         run: |
@@ -86,7 +89,7 @@ jobs:
                 -DCMAKE_TOOLCHAIN_FILE="$NDK/build/cmake/android.toolchain.cmake" \
                 -DANDROID_ABI=arm64-v8a -DANDROID_PLATFORM="android-$ANDROID_API" \
                 -DCMAKE_BUILD_TYPE=Release \
-                -DVORTEK_VULKAN_INCLUDE_DIR="$PWD/server/vortekrenderer/include" \
+                -DVORTEK_VULKAN_INCLUDE_DIR="$PWD/.ci-vulkan-include" \
                 -DCMAKE_C_FLAGS="-I$PWD/.ci-x11-include" \
                 -DCMAKE_INSTALL_PREFIX="$PWD/out-client"
           cmake --build /tmp/build-client -j"$(nproc)"
@@ -140,9 +143,9 @@ jobs:
                 -DCMAKE_TOOLCHAIN_FILE="$NDK/build/cmake/android.toolchain.cmake" \
                 -DANDROID_ABI=arm64-v8a -DANDROID_PLATFORM="android-$ANDROID_API" \
                 -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=ON \
-                -DCMAKE_INSTALL_PREFIX="$PWD/out-server"
+                -DCMAKE_LIBRARY_OUTPUT_DIRECTORY="$PWD/out-server/lib"
           cmake --build /tmp/build-adrenotools -j"$(nproc)"
-          cmake --install /tmp/build-adrenotools
+          ls -la out-server/lib
 
       - name: 构建 libwinlator
         run: |
