@@ -1,0 +1,56 @@
+name: Termux glibc (aarch64-linux-gnu)
+
+# 面向 Termux glibc（termux-pacman）环境的构建：
+#   - 目标 aarch64-linux-gnu（glibc），不是 Android/bionic
+#   - 动态链接器与 RPATH 指向 $PREFIX/glibc（/data/data/com.termux/files/usr/glibc）
+#   - 产物可直接被 Termux 里带 glibc 前缀的 Wine / Hangover dlopen
+# 普通 Android(JNI) 那套仍在 build.yml 里，两者互不影响。
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build-termux-glibc:
+    name: Client ICD (Termux glibc)
+    # 公开仓库可用的原生 arm64 runner；若该标签不可用，改成 ubuntu-latest 并补 cross sysroot
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 安装构建依赖
+        run: |
+          set -eux
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq cmake ninja-build clang libx11-dev libxcb1-dev
+
+      - name: 准备 Vulkan 头（补齐 vk_video）
+        run: |
+          set -eux
+          mkdir -p "$PWD/.ci-vulkan-include"
+          cp -r server/vortekrenderer/include/vulkan "$PWD/.ci-vulkan-include/"
+          cp -r server/vortekrenderer/include/vk_video "$PWD/.ci-vulkan-include/"
+
+      - name: 配置并构建（目标 Termux glibc 前缀）
+        run: |
+          set -eux
+          cmake -S client/vortek -B /tmp/build-tg -G Ninja \
+                -DCMAKE_TOOLCHAIN_FILE="$PWD/cmake/toolchain-termux-glibc.cmake" \
+                -DCMAKE_BUILD_TYPE=Release \
+                -DVORTEK_VULKAN_INCLUDE_DIR="$PWD/.ci-vulkan-include" \
+                -DCMAKE_INSTALL_PREFIX="$PWD/out-termux-glibc"
+          cmake --build /tmp/build-tg -j"$(nproc)"
+          cmake --install /tmp/build-tg
+
+      - name: 校验产物（glibc 依赖 / RPATH / ICD 入口）
+        run: |
+          set -eux
+          bash scripts/verify-termux-glibc.sh out-termux-glibc/lib/libvulkan_vortek.so
+          ls -la out-termux-glibc/lib out-termux-glibc/share/vulkan/icd.d
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: vortek-client-termux-glibc-aarch64
+          path: out-termux-glibc
