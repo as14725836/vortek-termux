@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/data/data/com.termux/files/usr/bin/python3
 # -*- coding: utf-8 -*-
 """Wine 进程任务管理器（PyQt5）—— 单文件，面向 Termux / Termux:X11。
 
@@ -16,12 +16,24 @@
   读它的 PE 头 machine 字段 → i386 / x86_64 / ARM64，
   i386 在 64 位 Wine 下即为 wow64。
 
-用法:
-  python3 wine_task_manager.py                  # 只看 wine 相关进程
-  python3 wine_task_manager.py --all            # 当前 uid 全部进程
-  python3 wine_task_manager.py --no-tree        # 关掉树缩进（平铺）
-  python3 wine_task_manager.py --dump           # 不开窗口，打印统计+进程表
-  QT_QPA_PLATFORM=offscreen python3 wine_task_manager.py --self-test
+用法（Termux）:
+  # 解释器就用 Termux 自带的（shebang 已写死成 Termux 的 python3）
+
+  $PREFIX/bin/python3 wine_task_manager.py             # 只看 wine 相关进程
+  $PREFIX/bin/python3 wine_task_manager.py --all       # 当前 uid 全部进程
+  $PREFIX/bin/python3 wine_task_manager.py --no-tree   # 关掉树缩进（平铺）
+  $PREFIX/bin/python3 wine_task_manager.py --dump      # 不开窗口，打印统计+进程表
+  QT_QPA_PLATFORM=offscreen $PREFIX/bin/python3 wine_task_manager.py --self-test
+
+  # 或者用它自带的启动器（自动找 Termux python、自动设 DISPLAY）
+  ./wine_task_manager.sh
+  ./wine_task_manager.sh --all
+
+关于解释器路径:
+  - shebang 写的是 Termux 原生的 python3: /data/data/com.termux/files/usr/bin/python3
+    （也就是 $PREFIX/bin/python3），直接 ./wine_task_manager.py 就跑对了
+  - 换别的环境（glibc 前缀 / 桌面 Linux）时，用 `python3 wine_task_manager.py` 显式指定即可，
+    或者改回 #!/usr/bin/env python3
 
 依赖: PyQt5（Termux 原生 `pkg install python-pyqt5`；glibc 前缀 `pacman -S python-pyqt5`）
 显示: DISPLAY=:0（Termux:X11）
