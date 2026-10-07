@@ -80,7 +80,7 @@ jobs:
           cp -r /usr/include/X11 /usr/include/xcb "$PWD/.ci-x11-include/"
           # 只取 vulkan/ 子目录：直接加 server/vortekrenderer/include 会遮蔽客户端的同名头
           mkdir -p "$PWD/.ci-vulkan-include"
-          cp -r server/vortekrenderer/include/vulkan "$PWD/.ci-vulkan-include/"
+          cp -r server/vortekrenderer/include/vulkan server/vortekrenderer/include/vk_video "$PWD/.ci-vulkan-include/"
 
       - name: 配置并构建 ICD
         run: |
