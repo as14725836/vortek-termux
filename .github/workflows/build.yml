@@ -1,0 +1,180 @@
+name: Build & Verify
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+  pull_request:
+
+permissions:
+  contents: read
+
+env:
+  ANDROID_API: 26
+
+jobs:
+  # ------------------------------------------------------------------
+  # 1) 主机单元测试：ring buffer 回归 + 收发合并微基准
+  #    直接用 x86_64 runner 编译 client/vortek/src/ring_buffer.c，不依赖 Android 工具链
+  # ------------------------------------------------------------------
+  host-tests:
+    name: Host tests (ring buffer)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 显示改动范围
+        run: |
+          echo "== 本次改动的文件 =="
+          git log --oneline -1
+          git status --short || true
+
+      - name: 编译并运行 ring buffer 回归测试
+        run: |
+          set -eux
+          cc -O2 -Wall -Wextra -D_GNU_SOURCE -Iclient/vortek/include \
+             -o /tmp/ring_test \
+             tests/test_ring_buffer.c client/vortek/src/ring_buffer.c -lpthread
+          /tmp/ring_test
+
+      - name: 微基准（旧 2x RingBuffer_write  vs  新 RingBuffer_write2）
+        run: /tmp/ring_test bench | tee /tmp/bench.txt
+
+      - name: 摘要
+        run: |
+          {
+            echo "### ring buffer 微基准"
+            echo '```'
+            grep -E '旧:|新:|差:' /tmp/bench.txt || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # ------------------------------------------------------------------
+  # 2) Android 客户端（Vulkan ICD）：arm64-v8a
+  # ------------------------------------------------------------------
+  build-client:
+    name: Client ICD (arm64-v8a)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 定位 NDK
+        run: |
+          set -eux
+          NDK="${ANDROID_NDK_LATEST_HOME:-${ANDROID_NDK_HOME:-}}"
+          if [ -z "$NDK" ] || [ ! -d "$NDK" ]; then
+            echo "找不到 NDK，尝试安装"
+            yes | "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" --install "ndk;27.0.12077973" >/dev/null || true
+            NDK="$ANDROID_SDK_ROOT/ndk/27.0.12077973"
+          fi
+          test -d "$NDK" || { echo "FATAL: 无 NDK"; exit 1; }
+          echo "NDK=$NDK" >> "$GITHUB_ENV"
+          echo "NDK 版本: $(cat "$NDK/source.properties" 2>/dev/null | tr '\n' ' ')"
+
+      - name: 安装 X11/xcb 头（客户端需要：vulkan.h 会引 <xcb/xcb.h>）
+        run: |
+          set -eux
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq libx11-dev libxcb1-dev
+          mkdir -p "$PWD/.ci-x11-include"
+          cp -r /usr/include/X11 /usr/include/xcb "$PWD/.ci-x11-include/"
+          # 只取 vulkan/ 子目录：直接加 server/vortekrenderer/include 会遮蔽客户端的同名头
+          mkdir -p "$PWD/.ci-vulkan-include"
+          cp -r server/vortekrenderer/include/vulkan server/vortekrenderer/include/vk_video "$PWD/.ci-vulkan-include/"
+
+      - name: 配置并构建 ICD
+        run: |
+          set -eux
+          cmake -S client/vortek -B /tmp/build-client -G Ninja \
+                -DCMAKE_TOOLCHAIN_FILE="$NDK/build/cmake/android.toolchain.cmake" \
+                -DANDROID_ABI=arm64-v8a -DANDROID_PLATFORM="android-$ANDROID_API" \
+                -DCMAKE_BUILD_TYPE=Release \
+                -DVORTEK_VULKAN_INCLUDE_DIR="$PWD/.ci-vulkan-include" \
+                -DCMAKE_C_FLAGS="-I$PWD/.ci-x11-include" \
+                -DCMAKE_INSTALL_PREFIX="$PWD/out-client"
+          cmake --build /tmp/build-client -j"$(nproc)"
+          cmake --install /tmp/build-client
+
+      - name: 校验产物
+        run: |
+          set -eux
+          file out-client/lib/libvulkan_vortek.so
+          python3 - <<'PY'
+          import subprocess, sys
+          out = subprocess.check_output(['readelf','-h','out-client/lib/libvulkan_vortek.so'], text=True)
+          assert 'AArch64' in out, out
+          print('ELF 架构 OK (AArch64)')
+          dyn = subprocess.check_output(['readelf','--dyn-syms','-W','out-client/lib/libvulkan_vortek.so'], text=True)
+          need = ['vk_icdGetInstanceProcAddr', 'vk_icdNegotiateLoaderICDInterfaceVersion']
+          for n in need:
+              if n not in dyn:
+                  print('缺少 ICD 入口:', n); sys.exit(1)
+          print('ICD 入口符号 OK:', ', '.join(need))
+          PY
+          ls -la out-client/lib out-client/share/vulkan/icd.d
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: vortek-client-arm64-v8a
+          path: out-client
+
+  # ------------------------------------------------------------------
+  # 3) Android 服务端（libwinlator + libadrenotools + vortekrenderer）
+  #    注：CLI（X11/DRI3 版）依赖 Termux 的 android-shmem / xcb-dri3，CI 里只构建 JNI 版
+  # ------------------------------------------------------------------
+  build-server:
+    name: Server renderer (arm64-v8a, JNI)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 定位 NDK
+        run: |
+          set -eux
+          NDK="${ANDROID_NDK_LATEST_HOME:-${ANDROID_NDK_HOME:-}}"
+          test -d "$NDK" || { echo "FATAL: 无 NDK"; exit 1; }
+          echo "NDK=$NDK" >> "$GITHUB_ENV"
+
+      - name: 构建 libadrenotools
+        run: |
+          set -eux
+          cmake -S server/libadrenotools -B /tmp/build-adrenotools -G Ninja \
+                -DCMAKE_TOOLCHAIN_FILE="$NDK/build/cmake/android.toolchain.cmake" \
+                -DANDROID_ABI=arm64-v8a -DANDROID_PLATFORM="android-$ANDROID_API" \
+                -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=ON \
+                -DCMAKE_LIBRARY_OUTPUT_DIRECTORY="$PWD/out-server/lib"
+          cmake --build /tmp/build-adrenotools -j"$(nproc)"
+          ls -la out-server/lib
+
+      - name: 构建 libwinlator
+        run: |
+          set -eux
+          cmake -S server/winlator -B /tmp/build-winlator -G Ninja \
+                -DCMAKE_TOOLCHAIN_FILE="$NDK/build/cmake/android.toolchain.cmake" \
+                -DANDROID_ABI=arm64-v8a -DANDROID_PLATFORM="android-$ANDROID_API" \
+                -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=ON \
+                -DCMAKE_LIBRARY_OUTPUT_DIRECTORY="$PWD/out-server/lib"
+          cmake --build /tmp/build-winlator -j"$(nproc)"
+          ls -la out-server/lib
+
+      - name: 构建 vortekrenderer (JNI)
+        run: |
+          set -eux
+          cmake -S server/vortekrenderer -B /tmp/build-renderer -G Ninja \
+                -DCMAKE_TOOLCHAIN_FILE="$NDK/build/cmake/android.toolchain.cmake" \
+                -DANDROID_ABI=arm64-v8a -DANDROID_PLATFORM="android-$ANDROID_API" \
+                -DCMAKE_BUILD_TYPE=Release \
+                -DVORTEK_BUILD_JNI=ON -DVORTEK_BUILD_CLI=OFF \
+                -DADRENOTOOLS_INCLUDE_DIR="$PWD/server/libadrenotools/include" \
+                -DWINLATOR_SOURCE_DIR="$PWD/server/winlator" \
+                -DCMAKE_SHARED_LINKER_FLAGS="-L$PWD/out-server/lib" \
+                -DCMAKE_LIBRARY_OUTPUT_DIRECTORY="$PWD/out-server/lib"
+          cmake --build /tmp/build-renderer -j"$(nproc)"
+          file out-server/lib/libvortekrenderer.so
+
+      - uses: actions/upload-artifact@v4
+        if: success()
+        with:
+          name: vortek-server-arm64-v8a
+          path: out-server/lib

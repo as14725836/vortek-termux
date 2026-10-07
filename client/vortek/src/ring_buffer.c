@@ -175,6 +175,68 @@ bool RingBuffer_write(RingBuffer* ring, const void* data, uint32_t size) {
     return true;
 }
 
+/* 一次 waitForWrite + 一次 setTail 写完 header+payload。
+ * 相比原来连调两次 RingBuffer_write，省掉一次 waitForWrite、一次 tail 提交
+ * 和一次 futex_wake 系统调用 —— 这是每次客户端调用都会走的路径。 */
+bool RingBuffer_write2(RingBuffer* ring, const void* header, uint32_t headerSize,
+                       const void* data, uint32_t dataSize) {
+    uint32_t total = headerSize + dataSize;
+    if (total == 0) return true;
+    if (total > ring->bufferSize) {
+        debug_printf("ring: buffer overflow on write2 (%u/%u)\n", total, ring->bufferSize);
+        return false;
+    }
+    if (!RingBuffer_waitForWrite(ring, total)) return false;
+
+    uint32_t tail = RingBuffer_getTail(ring);
+    uint32_t offset = tail & (ring->bufferSize - 1);
+    uint32_t first = ring->bufferSize - offset;
+
+    if (headerSize > 0) {
+        if (headerSize <= first) {
+            memcpy(ring->buffer + offset, header, headerSize);
+        }
+        else {
+            memcpy(ring->buffer + offset, header, first);
+            memcpy(ring->buffer, (const char*)header + first, headerSize - first);
+        }
+    }
+
+    if (dataSize > 0) {
+        uint32_t hoffset = (offset + headerSize) & (ring->bufferSize - 1);
+        uint32_t pfirst = ring->bufferSize - hoffset;
+        if (dataSize <= pfirst) {
+            memcpy(ring->buffer + hoffset, data, dataSize);
+        }
+        else {
+            memcpy(ring->buffer + hoffset, data, pfirst);
+            memcpy(ring->buffer, (const char*)data + pfirst, dataSize - pfirst);
+        }
+    }
+
+    RingBuffer_setTail(ring, tail + total);
+    return true;
+}
+/* 从 head 往后数 offset 字节处读 size 字节，但不推进 head */
+bool RingBuffer_peekAt(RingBuffer* ring, uint32_t offset, void* data, uint32_t size) {
+    if (size == 0) return true;
+    if (size > ring->bufferSize) return false;
+    if (RingBuffer_size(ring) < offset + size) return false;
+    uint32_t pos = (RingBuffer_getHead(ring) + offset) & (ring->bufferSize - 1);
+    uint32_t first = ring->bufferSize - pos;
+    if (size <= first) {
+        memcpy(data, ring->buffer + pos, size);
+    }
+    else {
+        memcpy(data, ring->buffer + pos, first);
+        memcpy((char*)data + first, ring->buffer, size - first);
+    }
+    return true;
+}
+void RingBuffer_commit(RingBuffer* ring, uint32_t size) {
+    if (size == 0) return;
+    RingBuffer_setHead(ring, RingBuffer_getHead(ring) + size);
+}
 uint32_t RingBuffer_getSHMemSize(uint32_t bufferSize) {
     STRUCT_OFFSETS();
 
