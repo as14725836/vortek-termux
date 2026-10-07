@@ -71,6 +71,14 @@ jobs:
           echo "NDK=$NDK" >> "$GITHUB_ENV"
           echo "NDK 版本: $(cat "$NDK/source.properties" 2>/dev/null | tr '\n' ' ')"
 
+      - name: 安装 X11/xcb 头（客户端需要：vulkan.h 会引 <xcb/xcb.h>）
+        run: |
+          set -eux
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq libx11-dev libxcb1-dev
+          mkdir -p "$PWD/.ci-x11-include"
+          cp -r /usr/include/X11 /usr/include/xcb "$PWD/.ci-x11-include/"
+
       - name: 配置并构建 ICD
         run: |
           set -eux
@@ -79,6 +87,7 @@ jobs:
                 -DANDROID_ABI=arm64-v8a -DANDROID_PLATFORM="android-$ANDROID_API" \
                 -DCMAKE_BUILD_TYPE=Release \
                 -DVORTEK_VULKAN_INCLUDE_DIR="$PWD/server/vortekrenderer/include" \
+                -DCMAKE_C_FLAGS="-I$PWD/.ci-x11-include" \
                 -DCMAKE_INSTALL_PREFIX="$PWD/out-client"
           cmake --build /tmp/build-client -j"$(nproc)"
           cmake --install /tmp/build-client
