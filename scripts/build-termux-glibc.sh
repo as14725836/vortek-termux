@@ -26,6 +26,7 @@ inc="$here/.build-tg-include"
 mkdir -p "$inc"
 [ -d "$here/server/vortekrenderer/include/vulkan" ] && cp -r "$here/server/vortekrenderer/include/vulkan" "$inc/"
 [ -d "$here/server/vortekrenderer/include/vk_video" ] && cp -r "$here/server/vortekrenderer/include/vk_video" "$inc/"
+cp -f "$here/client/vortek/third_party/vulkan-platform/vulkan/vk_icd.h" "$inc/vulkan/" 2>/dev/null || true
 
 cflags=""
 for d in "$G/include" "${PREFIX:-}/include"; do

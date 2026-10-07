@@ -32,6 +32,9 @@ jobs:
           mkdir -p "$PWD/.ci-vulkan-include"
           cp -r server/vortekrenderer/include/vulkan "$PWD/.ci-vulkan-include/"
           cp -r server/vortekrenderer/include/vk_video "$PWD/.ci-vulkan-include/"
+          # vk_icd.h 不在 vulkan-headers/NDK 公共头里，仓库自带一份，
+          # 必须放在 vulkan/ 旁边（它自身 #include "vulkan.h"）
+          cp client/vortek/third_party/vulkan-platform/vulkan/vk_icd.h "$PWD/.ci-vulkan-include/vulkan/"
 
       - name: 配置并构建（目标 Termux glibc 前缀）
         run: |
