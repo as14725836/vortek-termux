@@ -1,0 +1,3 @@
+/root/vortek/out-local/lib/libvulkan_vortek.so
+/root/vortek/out-local/share/vulkan/icd.d/vortek_icd.aarch64.json
+/root/vortek/out-local/share/vulkan/icd.d/vortek_icd.relocatable.aarch64.json

@@ -51,3 +51,14 @@ endif()
 
 install(TARGETS vulkan_vortek LIBRARY DESTINATION lib)
 install(FILES vortek_icd.aarch64.json DESTINATION share/vulkan/icd.d)
+
+# 可重定位版本：library_path 用相对 manifest 自身的路径（icd.d -> vulkan -> share -> 前缀根 -> lib/）
+# 已用真实 Vulkan loader 验证：loader 会把相对路径按 manifest 所在目录解析
+# （tools/icd_load_probe.py relative）。这样解压到任意目录都能直接用。
+set(VORTEK_ICD_ABS_PATH "/data/data/com.termux/files/usr/glibc/lib/libvulkan_vortek.so")
+file(READ "${CMAKE_CURRENT_SOURCE_DIR}/vortek_icd.aarch64.json" _vortek_icd_json)
+string(REPLACE "${VORTEK_ICD_ABS_PATH}" "../../../lib/libvulkan_vortek.so"
+       _vortek_icd_json_rel "${_vortek_icd_json}")
+file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/vortek_icd.relocatable.aarch64.json" "${_vortek_icd_json_rel}")
+install(FILES "${CMAKE_CURRENT_BINARY_DIR}/vortek_icd.relocatable.aarch64.json"
+        DESTINATION share/vulkan/icd.d)

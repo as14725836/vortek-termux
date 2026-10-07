@@ -1,0 +1,7 @@
+/root/vortek/build-local/CMakeFiles/vulkan_vortek.dir
+/root/vortek/build-local/CMakeFiles/edit_cache.dir
+/root/vortek/build-local/CMakeFiles/rebuild_cache.dir
+/root/vortek/build-local/CMakeFiles/list_install_components.dir
+/root/vortek/build-local/CMakeFiles/install.dir
+/root/vortek/build-local/CMakeFiles/install/local.dir
+/root/vortek/build-local/CMakeFiles/install/strip.dir
