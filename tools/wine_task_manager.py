@@ -31,13 +31,23 @@ from __future__ import annotations
 import argparse
 import os
 import re
+import shutil
 import signal
 import struct
 import subprocess
 import sys
 import time
 
-CLK_TCK = os.sysconf('SC_CLK_TCK') if hasattr(os, 'sysconf') else 100
+# 注意：Android/bionic（Termux 原生 python）上 sysconf 可能不支持某些键
+try:
+    CLK_TCK = os.sysconf('SC_CLK_TCK')
+except (ValueError, OSError, AttributeError):
+    CLK_TCK = 100
+
+try:
+    PAGE_KB = max(1, os.sysconf('SC_PAGE_SIZE') // 1024)
+except (ValueError, OSError, AttributeError):
+    PAGE_KB = 4
 
 WINE_PATTERNS = re.compile(
     r'(wine|wineserver|winhandler|winedevice|plugplay|services\.exe|explorer\.exe|'
@@ -117,7 +127,7 @@ def read_rss_kb(pid):
     raw = _read('/proc/%d/statm' % pid, 256)
     if raw:
         try:
-            return int(raw.split()[1]) * (os.sysconf('SC_PAGE_SIZE') // 1024)
+            return int(raw.split()[1]) * PAGE_KB
         except (ValueError, IndexError):
             pass
     st = _read('/proc/%d/status' % pid, 8192).decode('utf-8', 'replace')
@@ -129,7 +139,56 @@ def read_affinity(pid):
     try:
         return os.sched_getaffinity(pid)
     except (OSError, PermissionError, AttributeError):
+        pass
+    # bionic（Termux 原生 python）可能没有 os.sched_getaffinity，退回读 /proc/<pid>/status
+    st = _read('/proc/%d/status' % pid, 8192).decode('utf-8', 'replace')
+    m = re.search(r'^Cpus_allowed_list:\s+(.+)$', st, re.M)
+    if not m:
         return None
+    out = set()
+    for part in m.group(1).strip().split(','):
+        part = part.strip()
+        if not part:
+            continue
+        if '-' in part:
+            a, b = part.split('-', 1)
+            out.update(range(int(a), int(b) + 1))
+        else:
+            out.add(int(part))
+    return out
+
+
+def set_affinity(pid, mask):
+    """设置 CPU 亲和；sched_setaffinity 不可用时退回 taskset。返回错误字符串或 None。"""
+    try:
+        os.sched_setaffinity(pid, mask)
+        return None
+    except (OSError, AttributeError) as e1:
+        try:
+            subprocess.check_call(
+                ['taskset', '-pc', ','.join(str(c) for c in sorted(mask)), str(pid)],
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            return None
+        except (OSError, subprocess.SubprocessError) as e2:
+            return '设置亲和性失败: %s（taskset 也失败: %s）' % (e1, e2)
+
+
+def find_wine():
+    """在 Termux 里找一个能用的 wine（作为"新建任务"的默认命令）。"""
+    cands = []
+    for var in ('TERMUX_GLIBC_PREFIX', 'PREFIX'):
+        base = os.environ.get(var)
+        if not base:
+            continue
+        cands += [os.path.join(base, 'bin', 'wine'),
+                  os.path.join(base, 'opt', 'wine', 'bin', 'wine'),
+                  os.path.join(base, 'glibc', 'bin', 'wine')]
+    cands += [os.path.expanduser('~/wine/bin/wine'), '/usr/bin/wine',
+              shutil.which('wine') or '']
+    for c in cands:
+        if c and os.path.isfile(c) and os.access(c, os.X_OK):
+            return c
+    return 'wine'
 
 
 _pe_cache = {}          # pid -> (exe_path, arch, wow64, pe, ts)
@@ -525,16 +584,16 @@ def run_gui(args):
                 if not mask:
                     QMessageBox.warning(self, '亲和性', '至少要选一个核心')
                     return
-                try:
-                    os.sched_setaffinity(pid, mask)
-                    self.status.setText('PID %d 亲和性 -> %s' % (pid, fmt_affinity(mask)))
-                except OSError as e:
-                    self.status.setText('设置亲和失败: %s' % e)
+                err = set_affinity(pid, mask)
+                self.status.setText('设置亲和失败: %s' % err if err else
+                                    ('PID %d 亲和性 -> %s' % (pid, fmt_affinity(mask))))
                 self.refresh()
 
         def new_task(self):
-            cmd, ok = QInputDialog.getText(self, '新建任务', '命令（在 Termux 侧执行）:',
-                                           QLineEdit.Normal, 'wine ')
+            default = find_wine() + ' '
+            cmd, ok = QInputDialog.getText(self, '新建任务',
+                                           '命令（在 Termux 侧执行；wine: %s）:' % default,
+                                           QLineEdit.Normal, default)
             if not ok or not cmd.strip():
                 return
             try:
@@ -544,7 +603,19 @@ def run_gui(args):
                 self.status.setText('启动失败: %s' % e)
 
     app = QApplication(sys.argv)
-    app.setFont(QFont('DejaVu Sans', 11))
+    # Termux 里默认字体常常没有中文字形，游戏/目录名会变方块 —— 给一串候选字体
+    f = QFont()
+    try:
+        f.setFamilies(['Noto Sans CJK SC', 'Droid Sans Fallback', 'Source Han Sans SC',
+                       'DejaVu Sans', 'sans-serif'])
+    except AttributeError:      # 老 Qt 没有 setFamilies
+        f.setFamily('Noto Sans CJK SC')
+    f.setPointSize(11)
+    app.setFont(f)
+    if not (os.environ.get('DISPLAY') or os.environ.get('WAYLAND_DISPLAY')) \
+            and os.environ.get('QT_QPA_PLATFORM') != 'offscreen':
+        print('提示: 没有检测到 DISPLAY/WAYLAND_DISPLAY。'
+              'Termux 里请先起 Termux:X11 应用，然后 export DISPLAY=:0', file=sys.stderr)
     w = TaskManager()
     w.resize(args.width, args.height)
     w.show()
