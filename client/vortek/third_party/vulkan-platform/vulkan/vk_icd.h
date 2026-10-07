@@ -7,7 +7,7 @@
  */
 #pragma once
 
-#include "vulkan.h"
+#include <vulkan/vulkan_core.h>
 #include <stdbool.h>
 
 // Loader-ICD version negotiation API.  Versions add the following features:
